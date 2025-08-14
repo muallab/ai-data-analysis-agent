@@ -31,18 +31,26 @@ Your task:
 - Suggest a chart if useful (type + relevant columns)
 - Explain the reasoning
 
-Rules:
-- Only reference existing columns
-- Prefer SQL for aggregations and filtering
-- Prefer Pandas for complex transformations or custom logic
-- For chart spec, keep it minimal JSON: {"type": "bar", "x": "category", "y": "total_revenue"}
+STRICT RULES:
+- Only reference existing columns from the schema.
+- If you choose SQL:
+  - Assume the input table is EXACTLY named: table_name  (no spaces, no quotes)
+  - Do NOT invent other table names.
+- If you choose Pandas:
+  - Assume the input DataFrame is EXACTLY named: df
+  - Your code MUST set a final DataFrame variable named: result
+    (example: result = df.groupby("col")["x"].sum().reset_index())
+- For chart spec, return minimal JSON like:
+  {"type": "bar", "x": "category", "y": "total_revenue"}
+  or for pie:
+  {"type": "pie", "names": "category", "values": "total_revenue"}
 
-Return valid JSON in this format:
+Return VALID JSON in this format:
 {
   "approach": "sql" | "pandas",
   "plan": ["Step 1...", "Step 2...", "Step 3..."],
   "code": "<SQL or Python code>",
-  "chart": {"type": "...", "x": "...", "y": "..."} | null,
+  "chart": {"type": "...", "x": "...", "y": "..."} | {"type":"pie","names":"...","values":"..."} | null,
   "explanation": "Concise reasoning here"
 }
 """.strip()
