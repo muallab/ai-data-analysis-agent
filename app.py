@@ -3,6 +3,8 @@ from pathlib import Path
 import pandas as pd
 
 from agent.dataio import save_upload, load_dataframe, summarize_schema
+from agent.llm import get_client, ChatMessage
+from agent.prompts import SYSTEM_PROMPT
 
 st.set_page_config(page_title="AI Data Analysis Agent", layout="wide")
 st.title("AI Data Analysis Agent (from scratch)")
@@ -26,9 +28,8 @@ def _schema_metrics(schema: dict):
 # Intro state
 if not uploaded:
     st.markdown("""
-This step adds **data ingest**:
-- Upload a **CSV/XLSX** on the left
-- We’ll cache the dataset and show a **schema summary** (types, missing %, sample rows)
+This step added **data ingest** (upload + schema).
+Now, we also add a small **LLM sanity check** to read your schema and propose ideas.
 """)
     with st.expander("Project Health Check", expanded=True):
         sample = Path("data/samples/sales.csv")
@@ -54,4 +55,30 @@ with st.expander("Missing values (%)", expanded=False):
 st.subheader("Sample Rows (first 5)")
 st.dataframe(df.head(5), use_container_width=True)
 
-st.info("✅ Step 2 complete when you can upload a file and see this summary. Next: the LLM planner.")
+# --- Step 3: LLM sanity check ---
+st.subheader("LLM Sanity Check (no code execution yet)")
+st.caption("The model reads the schema and suggests next steps.")
+
+if st.button("Generate analysis ideas"):
+    # Prepare a compact schema string
+    schema_txt = (
+        f"Columns: {schema['columns']}\n"
+        f"Dtypes: {schema['dtypes']}\n"
+        f"Missing%: {schema['missing_pct']}\n"
+        f"Shape: {schema['shape']}\n"
+        f"Sample rows: {schema['sample_rows']}"
+    )
+    messages = [
+        ChatMessage(role="system", content=SYSTEM_PROMPT),
+        ChatMessage(role="user", content=f"Here is the dataset schema:\n{schema_txt}\n\nPropose ideas."),
+    ]
+    try:
+        client = get_client()
+        with st.spinner("Asking the model..."):
+            answer = client.chat(messages, temperature=0.2)
+        st.success("Ideas generated")
+        st.write(answer)
+    except Exception as e:
+        st.error(f"LLM call failed: {e}")
+
+st.info("✅ Step 3 will be complete when the button above returns sensible ideas.")
