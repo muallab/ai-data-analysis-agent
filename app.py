@@ -4,7 +4,7 @@ import pandas as pd
 
 from agent.dataio import save_upload, load_dataframe, summarize_schema
 from agent.llm import get_client, ChatMessage
-from agent.prompts import SYSTEM_PROMPT
+from agent.prompts import SYSTEM_PROMPT, PLANNER_PROMPT
 
 st.set_page_config(page_title="AI Data Analysis Agent", layout="wide")
 st.title("AI Data Analysis Agent (from scratch)")
@@ -25,11 +25,15 @@ def _schema_metrics(schema: dict):
     total_missing = sum(schema["missing_pct"].values())
     cols[2].metric("Missing (%) total", f"{total_missing:.2f}")
 
-# Intro state
+# If no file uploaded yet
 if not uploaded:
     st.markdown("""
-This step added **data ingest** (upload + schema).
-Now, we also add a small **LLM sanity check** to read your schema and propose ideas.
+**Current features:**
+1. Step 2: Upload CSV/XLSX and see schema summary
+2. Step 3: LLM reads schema and suggests analysis ideas
+3. Step 4: Planner creates a structured JSON plan
+
+Upload a file on the left to continue.
 """)
     with st.expander("Project Health Check", expanded=True):
         sample = Path("data/samples/sales.csv")
@@ -37,7 +41,7 @@ Now, we also add a small **LLM sanity check** to read your schema and propose id
         st.write(f"📄 Sample data exists: {sample.exists()}  →  {sample}")
     st.stop()
 
-# Save uploaded file & load cached DataFrame
+# Save and load
 dest_path = save_upload(uploaded.name, uploaded.getvalue())
 df = _cache_load_dataframe(str(dest_path))
 
@@ -55,12 +59,9 @@ with st.expander("Missing values (%)", expanded=False):
 st.subheader("Sample Rows (first 5)")
 st.dataframe(df.head(5), use_container_width=True)
 
-# --- Step 3: LLM sanity check ---
-st.subheader("LLM Sanity Check (no code execution yet)")
-st.caption("The model reads the schema and suggests next steps.")
-
+# --- Step 3: LLM Sanity Check ---
+st.subheader("Step 3: LLM Sanity Check (no code execution yet)")
 if st.button("Generate analysis ideas"):
-    # Prepare a compact schema string
     schema_txt = (
         f"Columns: {schema['columns']}\n"
         f"Dtypes: {schema['dtypes']}\n"
@@ -81,4 +82,28 @@ if st.button("Generate analysis ideas"):
     except Exception as e:
         st.error(f"LLM call failed: {e}")
 
-st.info("✅ Step 3 will be complete when the button above returns sensible ideas.")
+# --- Step 4: Planning Agent ---
+st.subheader("Step 4: Planning Agent")
+question = st.text_input(
+    "Enter your analysis question",
+    "Which category has the highest total revenue?"
+)
+if st.button("Generate plan"):
+    schema_txt = (
+        f"Columns: {schema['columns']}\n"
+        f"Dtypes: {schema['dtypes']}\n"
+        f"Missing%: {schema['missing_pct']}\n"
+        f"Shape: {schema['shape']}\n"
+    )
+    messages = [
+        ChatMessage(role="system", content=PLANNER_PROMPT),
+        ChatMessage(role="user", content=f"Schema:\n{schema_txt}\nQuestion:\n{question}"),
+    ]
+    try:
+        client = get_client()
+        with st.spinner("Planning..."):
+            answer = client.chat(messages, temperature=0.2)
+        st.success("Plan generated")
+        st.code(answer, language="json")
+    except Exception as e:
+        st.error(f"Planner failed: {e}")
