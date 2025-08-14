@@ -1,0 +1,5 @@
+order_id,date,channel,category,qty,price
+1,2024-01-05,Ads,Books,2,12.5
+2,2024-01-07,Email,Games,1,35
+3,2024-02-01,Organic,Books,3,10
+4,2024-03-15,Ads,Toys,5,8
