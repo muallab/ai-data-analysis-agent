@@ -1,10 +1,12 @@
 import streamlit as st
 from pathlib import Path
 import pandas as pd
+import json
 
 from agent.dataio import save_upload, load_dataframe, summarize_schema
 from agent.llm import get_client, ChatMessage
 from agent.prompts import SYSTEM_PROMPT, PLANNER_PROMPT
+from agent.executor import execute_sql, execute_pandas, render_chart
 
 st.set_page_config(page_title="AI Data Analysis Agent", layout="wide")
 st.title("AI Data Analysis Agent (from scratch)")
@@ -32,8 +34,7 @@ if not uploaded:
 1. Step 2: Upload CSV/XLSX and see schema summary
 2. Step 3: LLM reads schema and suggests analysis ideas
 3. Step 4: Planner creates a structured JSON plan
-
-Upload a file on the left to continue.
+4. Step 5: Execute plan and display results
 """)
     with st.expander("Project Health Check", expanded=True):
         sample = Path("data/samples/sales.csv")
@@ -88,6 +89,7 @@ question = st.text_input(
     "Enter your analysis question",
     "Which category has the highest total revenue?"
 )
+
 if st.button("Generate plan"):
     schema_txt = (
         f"Columns: {schema['columns']}\n"
@@ -105,5 +107,35 @@ if st.button("Generate plan"):
             answer = client.chat(messages, temperature=0.2)
         st.success("Plan generated")
         st.code(answer, language="json")
+        st.session_state.plan_output = answer  # store in session for Step 5
     except Exception as e:
         st.error(f"Planner failed: {e}")
+
+# --- Step 5: Execute Plan ---
+if "plan_output" in st.session_state:
+    try:
+        plan_data = json.loads(st.session_state.plan_output)
+    except json.JSONDecodeError as e:
+        st.error(f"Planner output is not valid JSON: {e}")
+        plan_data = None
+
+    if plan_data and st.button("Run plan"):
+        try:
+            if plan_data["approach"] == "sql":
+                result_df = execute_sql(df, plan_data["code"])
+            elif plan_data["approach"] == "pandas":
+                result_df = execute_pandas(df, plan_data["code"])
+            else:
+                st.error(f"Unknown approach: {plan_data['approach']}")
+                st.stop()
+
+            st.subheader("Execution Results")
+            st.dataframe(result_df, use_container_width=True)
+
+            if plan_data.get("chart"):
+                st.subheader("Chart")
+                fig = render_chart(result_df, plan_data["chart"])
+                st.plotly_chart(fig, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Execution failed: {e}")
