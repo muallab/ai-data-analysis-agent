@@ -2,10 +2,13 @@
 from __future__ import annotations
 import duckdb
 import pandas as pd
-import io
 import plotly.express as px
 
 def execute_sql(df: pd.DataFrame, sql_code: str) -> pd.DataFrame:
+    """
+    Execute SQL against a registered in-memory table via DuckDB.
+    The in-memory table is registered as 'table_name'.
+    """
     con = duckdb.connect()
     con.register("table_name", df)
     try:
@@ -15,26 +18,40 @@ def execute_sql(df: pd.DataFrame, sql_code: str) -> pd.DataFrame:
     return result
 
 def execute_pandas(df: pd.DataFrame, pandas_code: str) -> pd.DataFrame:
-    # Restrict globals and locals for safety
+    """
+    Execute *restricted* Pandas code.
+    Require the code to set a variable named 'result' (DataFrame).
+    """
     safe_globals = {"pd": pd}
     safe_locals = {"df": df.copy()}
-    exec(pandas_code, safe_globals, safe_locals)
-    # Expect the final dataframe to be in safe_locals['result']
+    exec(pandas_code, safe_globals, safe_locals)  # guarded context
     result = safe_locals.get("result")
     if not isinstance(result, pd.DataFrame):
         raise ValueError("Pandas code did not produce a DataFrame named 'result'.")
     return result
 
 def render_chart(df: pd.DataFrame, chart_spec: dict):
-    chart_type = chart_spec.get("type")
+    """
+    Render a Plotly chart from a minimal spec like:
+    {"type": "bar", "x": "category", "y": "total_revenue"}
+    """
+    if not isinstance(chart_spec, dict):
+        raise ValueError("chart_spec must be a dict with keys like type/x/y")
+
+    ctype = chart_spec.get("type")
     x = chart_spec.get("x")
     y = chart_spec.get("y")
 
-    if chart_type == "bar":
+    if ctype == "bar":
         return px.bar(df, x=x, y=y)
-    elif chart_type == "line":
+    elif ctype == "line":
         return px.line(df, x=x, y=y)
-    elif chart_type == "scatter":
+    elif ctype == "scatter":
         return px.scatter(df, x=x, y=y)
+    elif ctype == "pie":
+        # for pie we expect names and values
+        names = chart_spec.get("names", x)
+        values = chart_spec.get("values", y)
+        return px.pie(df, names=names, values=values)
     else:
-        raise ValueError(f"Unsupported chart type: {chart_type}")
+        raise ValueError(f"Unsupported chart type: {ctype}")

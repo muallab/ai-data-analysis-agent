@@ -31,10 +31,11 @@ def _schema_metrics(schema: dict):
 if not uploaded:
     st.markdown("""
 **Current features:**
-1. Step 2: Upload CSV/XLSX and see schema summary
-2. Step 3: LLM reads schema and suggests analysis ideas
-3. Step 4: Planner creates a structured JSON plan
-4. Step 5: Execute plan and display results
+1. Step 2: Upload CSV/XLSX and see schema summary  
+2. Step 3: LLM reads schema and suggests analysis ideas  
+3. Step 4: Planner creates a structured JSON plan  
+4. Step 5: Execute plan and display results (SQL or Pandas)  
+5. Step 6: Render charts when a chart spec is provided
 """)
     with st.expander("Project Health Check", expanded=True):
         sample = Path("data/samples/sales.csv")
@@ -107,11 +108,11 @@ if st.button("Generate plan"):
             answer = client.chat(messages, temperature=0.2)
         st.success("Plan generated")
         st.code(answer, language="json")
-        st.session_state.plan_output = answer  # store in session for Step 5
+        st.session_state.plan_output = answer  # persist plan for Step 5
     except Exception as e:
         st.error(f"Planner failed: {e}")
 
-# --- Step 5: Execute Plan ---
+# --- Step 5 & 6: Execute Plan + Render Chart ---
 if "plan_output" in st.session_state:
     try:
         plan_data = json.loads(st.session_state.plan_output)
@@ -121,6 +122,7 @@ if "plan_output" in st.session_state:
 
     if plan_data and st.button("Run plan"):
         try:
+            # Execute code per approach
             if plan_data["approach"] == "sql":
                 result_df = execute_sql(df, plan_data["code"])
             elif plan_data["approach"] == "pandas":
@@ -132,10 +134,15 @@ if "plan_output" in st.session_state:
             st.subheader("Execution Results")
             st.dataframe(result_df, use_container_width=True)
 
-            if plan_data.get("chart"):
-                st.subheader("Chart")
-                fig = render_chart(result_df, plan_data["chart"])
-                st.plotly_chart(fig, use_container_width=True)
+            # Step 6: Render chart if provided
+            chart_spec = plan_data.get("chart")
+            if chart_spec:
+                try:
+                    st.subheader("Chart")
+                    fig = render_chart(result_df, chart_spec)
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as ce:
+                    st.warning(f"Chart rendering skipped: {ce}")
 
         except Exception as e:
             st.error(f"Execution failed: {e}")
