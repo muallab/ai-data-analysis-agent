@@ -1,41 +1,58 @@
-import streamlit as st
-from pathlib import Path
-import pandas as pd
 import json
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
 
 from agent.dataio import save_upload, load_dataframe, summarize_schema
 from agent.llm import get_client, ChatMessage
-from agent.prompts import SYSTEM_PROMPT, PLANNER_PROMPT
+from agent.prompts import SYSTEM_PROMPT, PLANNER_PROMPT, EXPLAIN_PROMPT
 from agent.executor import execute_sql, execute_pandas, render_chart
 
-st.set_page_config(page_title="AI Data Analysis Agent", layout="wide")
+
+# ----------------------------
+# Page setup
+# ----------------------------
+st.set_page_config(page_title="AI Data Analysis Agent (from scratch)", layout="wide")
 st.title("AI Data Analysis Agent (from scratch)")
 
-# Sidebar: file upload
-st.sidebar.header("1) Upload a dataset")
-uploaded = st.sidebar.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx", "xls"])
 
+# ----------------------------
+# Helpers
+# ----------------------------
 @st.cache_data(show_spinner=False)
 def _cache_load_dataframe(path_str: str):
     """Cache the loaded DataFrame by file path string."""
     return load_dataframe(Path(path_str))
 
+
 def _schema_metrics(schema: dict):
     cols = st.columns(3)
     cols[0].metric("Rows", schema["shape"]["rows"])
     cols[1].metric("Columns", schema["shape"]["cols"])
-    total_missing = sum(schema["missing_pct"].values())
+    total_missing = sum(schema["missing_pct"].values()) if schema.get("missing_pct") else 0.0
     cols[2].metric("Missing (%) total", f"{total_missing:.2f}")
 
-# If no file uploaded yet
+
+def _df_preview_records(df: pd.DataFrame, max_rows: int = 50) -> list[dict]:
+    """Small JSON preview (records) to keep token usage sensible."""
+    return df.head(max_rows).to_dict(orient="records")
+
+
+# ----------------------------
+# Step 2: Upload + schema summary
+# ----------------------------
+st.sidebar.header("1) Upload a dataset")
+uploaded = st.sidebar.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx", "xls"])
+
 if not uploaded:
     st.markdown("""
-**Current features:**
-1. Step 2: Upload CSV/XLSX and see schema summary  
-2. Step 3: LLM reads schema and suggests analysis ideas  
-3. Step 4: Planner creates a structured JSON plan  
-4. Step 5: Execute plan and display results (SQL or Pandas)  
-5. Step 6: Render charts when a chart spec is provided
+**Features:**
+1. Upload CSV/XLSX and view schema summary  
+2. LLM reads schema and suggests analysis ideas  
+3. Planner produces a structured JSON plan (SQL or Pandas)  
+4. Execute the plan and render results (with charts)  
+5. Explain results in plain English
 """)
     with st.expander("Project Health Check", expanded=True):
         sample = Path("data/samples/sales.csv")
@@ -43,7 +60,7 @@ if not uploaded:
         st.write(f"📄 Sample data exists: {sample.exists()}  →  {sample}")
     st.stop()
 
-# Save and load
+# Persist upload and load DataFrame
 dest_path = save_upload(uploaded.name, uploaded.getvalue())
 df = _cache_load_dataframe(str(dest_path))
 
@@ -51,18 +68,18 @@ df = _cache_load_dataframe(str(dest_path))
 schema = summarize_schema(df)
 st.subheader("Schema Summary")
 _schema_metrics(schema)
-
 with st.expander("Column types", expanded=True):
     st.json(schema["dtypes"])
-
 with st.expander("Missing values (%)", expanded=False):
     st.json(schema["missing_pct"])
-
 st.subheader("Sample Rows (first 5)")
 st.dataframe(df.head(5), use_container_width=True)
 
-# --- Step 3: LLM Sanity Check ---
-st.subheader("Step 3: LLM Sanity Check (no code execution yet)")
+
+# ----------------------------
+# Step 3: LLM Sanity Check (ideas; no code execution)
+# ----------------------------
+st.subheader("Step 3: LLM Sanity Check (no code execution)")
 if st.button("Generate analysis ideas"):
     schema_txt = (
         f"Columns: {schema['columns']}\n"
@@ -84,7 +101,10 @@ if st.button("Generate analysis ideas"):
     except Exception as e:
         st.error(f"LLM call failed: {e}")
 
-# --- Step 4: Planning Agent ---
+
+# ----------------------------
+# Step 4: Planning Agent (structured JSON)
+# ----------------------------
 st.subheader("Step 4: Planning Agent")
 question = st.text_input(
     "Enter your analysis question",
@@ -105,14 +125,20 @@ if st.button("Generate plan"):
     try:
         client = get_client()
         with st.spinner("Planning..."):
-            answer = client.chat(messages, temperature=0.2)
+            plan_json = client.chat(messages, temperature=0.2)
         st.success("Plan generated")
-        st.code(answer, language="json")
-        st.session_state.plan_output = answer  # persist plan for Step 5
+        st.code(plan_json, language="json")
+        # Persist plan for Step 5
+        st.session_state.plan_output = plan_json
+        st.session_state.plan_question = question
+        st.session_state.plan_schema = schema
     except Exception as e:
         st.error(f"Planner failed: {e}")
 
-# --- Step 5 & 6: Execute Plan + Render Chart ---
+
+# ----------------------------
+# Step 5 & 6: Execute plan + render chart
+# ----------------------------
 if "plan_output" in st.session_state:
     try:
         plan_data = json.loads(st.session_state.plan_output)
@@ -122,7 +148,7 @@ if "plan_output" in st.session_state:
 
     if plan_data and st.button("Run plan"):
         try:
-            # Execute code per approach
+            # Execute per approach
             if plan_data["approach"] == "sql":
                 result_df = execute_sql(df, plan_data["code"])
             elif plan_data["approach"] == "pandas":
@@ -134,7 +160,7 @@ if "plan_output" in st.session_state:
             st.subheader("Execution Results")
             st.dataframe(result_df, use_container_width=True)
 
-            # Step 6: Render chart if provided
+            # Optional: chart rendering if chart spec is present
             chart_spec = plan_data.get("chart")
             if chart_spec:
                 try:
@@ -144,5 +170,56 @@ if "plan_output" in st.session_state:
                 except Exception as ce:
                     st.warning(f"Chart rendering skipped: {ce}")
 
+            # Save context for explanations
+            st.session_state.last_result = result_df
+            st.session_state.last_plan = plan_data
+            st.session_state.last_question = st.session_state.get("plan_question", question)
+            st.session_state.last_schema = st.session_state.get("plan_schema", schema)
+
         except Exception as e:
             st.error(f"Execution failed: {e}")
+
+
+# ----------------------------
+# Step 7: Explain results (natural language)
+# ----------------------------
+st.subheader("Step 7: Explain Results")
+
+if (
+    "last_result" in st.session_state
+    and isinstance(st.session_state.last_result, pd.DataFrame)
+    and not st.session_state.last_result.empty
+):
+    if st.button("Explain these results"):
+        try:
+            result_preview = _df_preview_records(st.session_state.last_result, max_rows=50)
+            payload = {
+                "question": st.session_state.get("last_question", ""),
+                "approach": st.session_state.last_plan.get("approach", ""),
+                "code": st.session_state.last_plan.get("code", "")[:4000],  # trim long code
+                "chart": st.session_state.last_plan.get("chart", None),
+                "result_preview": result_preview,
+                "result_shape": list(st.session_state.last_result.shape),
+                "schema": {
+                    "columns": st.session_state.last_schema.get("columns", []),
+                    "dtypes": st.session_state.last_schema.get("dtypes", {}),
+                    "missing_pct": st.session_state.last_schema.get("missing_pct", {}),
+                    "shape": st.session_state.last_schema.get("shape", {}),
+                },
+            }
+
+            messages = [
+                ChatMessage(role="system", content=EXPLAIN_PROMPT),
+                ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+            ]
+            client = get_client()
+            with st.spinner("Generating explanation..."):
+                explanation = client.chat(messages, temperature=0.2)
+
+            st.success("Explanation")
+            st.write(explanation)
+
+        except Exception as e:
+            st.error(f"Explanation failed: {e}")
+else:
+    st.caption("Run a plan first to enable explanations.")

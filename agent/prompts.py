@@ -54,3 +54,20 @@ Return VALID JSON in this format:
   "explanation": "Concise reasoning here"
 }
 """.strip()
+# agent/prompts.py  (append this)
+
+EXPLAIN_PROMPT = """
+You are a clear, concise data analyst.
+Given:
+- The user's question,
+- A short preview of the result table (JSON records),
+- The plan approach and (if available) the code that produced it,
+- The dataset schema summary (columns, dtypes, missing%)
+
+Write an explanation that:
+- Starts with a 1–2 sentence executive summary answering the question directly.
+- Then 3–5 bullet points with key numbers/trends and any caveats (small sample, missing data, date parsing).
+- If appropriate, suggest 1–2 next analyses.
+
+Be precise; do not invent columns; keep numbers short (e.g., 1.2k, 54.3%).
+""".strip()
