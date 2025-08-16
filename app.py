@@ -25,18 +25,23 @@ def _cache_load_dataframe(path_str: str):
     """Cache the loaded DataFrame by file path string."""
     return load_dataframe(Path(path_str))
 
-
 def _schema_metrics(schema: dict):
     cols = st.columns(3)
     cols[0].metric("Rows", schema["shape"]["rows"])
     cols[1].metric("Columns", schema["shape"]["cols"])
-    total_missing = sum(schema["missing_pct"].values()) if schema.get("missing_pct") else 0.0
+    total_missing = sum(schema.get("missing_pct", {}).values()) if schema.get("missing_pct") else 0.0
     cols[2].metric("Missing (%) total", f"{total_missing:.2f}")
-
 
 def _df_preview_records(df: pd.DataFrame, max_rows: int = 50) -> list[dict]:
     """Small JSON preview (records) to keep token usage sensible."""
     return df.head(max_rows).to_dict(orient="records")
+
+def _safe_loads(s: str):
+    """Safely parse JSON; return None on failure."""
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
 
 
 # ----------------------------
@@ -137,47 +142,55 @@ if st.button("Generate plan"):
 
 
 # ----------------------------
-# Step 5 & 6: Execute plan + render chart
+# Step 5 & 6: Execute plan + render chart (hardened)
 # ----------------------------
 if "plan_output" in st.session_state:
-    try:
-        plan_data = json.loads(st.session_state.plan_output)
-    except json.JSONDecodeError as e:
-        st.error(f"Planner output is not valid JSON: {e}")
-        plan_data = None
+    plan_data = _safe_loads(st.session_state.plan_output)
+    if not plan_data or not isinstance(plan_data, dict) or "approach" not in plan_data or "code" not in plan_data:
+        st.error("Planner returned invalid JSON. Please click **Generate plan** again.")
+    else:
+        if st.button("Run plan"):
+            try:
+                # Execute per approach
+                approach = plan_data.get("approach")
+                code = plan_data.get("code", "")
 
-    if plan_data and st.button("Run plan"):
-        try:
-            # Execute per approach
-            if plan_data["approach"] == "sql":
-                result_df = execute_sql(df, plan_data["code"])
-            elif plan_data["approach"] == "pandas":
-                result_df = execute_pandas(df, plan_data["code"])
-            else:
-                st.error(f"Unknown approach: {plan_data['approach']}")
-                st.stop()
+                if approach == "sql":
+                    result_df = execute_sql(df, code)
+                elif approach == "pandas":
+                    result_df = execute_pandas(df, code)  # must set: result = <DataFrame>
+                else:
+                    st.error(f"Unknown approach: {approach}")
+                    st.stop()
 
-            st.subheader("Execution Results")
-            st.dataframe(result_df, use_container_width=True)
+                # Optional: light number formatting for common column names
+                if "total_revenue" in result_df.columns:
+                    try:
+                        result_df["total_revenue"] = result_df["total_revenue"].astype(float).round(2)
+                    except Exception:
+                        pass
 
-            # Optional: chart rendering if chart spec is present
-            chart_spec = plan_data.get("chart")
-            if chart_spec:
-                try:
-                    st.subheader("Chart")
-                    fig = render_chart(result_df, chart_spec)
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as ce:
-                    st.warning(f"Chart rendering skipped: {ce}")
+                st.subheader("Execution Results")
+                st.dataframe(result_df, use_container_width=True)
 
-            # Save context for explanations
-            st.session_state.last_result = result_df
-            st.session_state.last_plan = plan_data
-            st.session_state.last_question = st.session_state.get("plan_question", question)
-            st.session_state.last_schema = st.session_state.get("plan_schema", schema)
+                # Step 6: Render chart if provided
+                chart_spec = plan_data.get("chart")
+                if chart_spec:
+                    try:
+                        st.subheader("Chart")
+                        fig = render_chart(result_df, chart_spec)
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as ce:
+                        st.warning(f"Chart rendering skipped: {ce}")
 
-        except Exception as e:
-            st.error(f"Execution failed: {e}")
+                # Save context for explanations (Step 7)
+                st.session_state.last_result = result_df
+                st.session_state.last_plan = plan_data
+                st.session_state.last_question = st.session_state.get("plan_question", question)
+                st.session_state.last_schema = st.session_state.get("plan_schema", schema)
+
+            except Exception as e:
+                st.error(f"Execution failed: {e}")
 
 
 # ----------------------------
@@ -217,7 +230,7 @@ if (
                 explanation = client.chat(messages, temperature=0.2)
 
             st.success("Explanation")
-            st.write(explanation)
+            st.markdown(explanation)  # markdown renders bullets better
 
         except Exception as e:
             st.error(f"Explanation failed: {e}")
